@@ -23,46 +23,44 @@ create_keyspace_and_table(session, cassandra_keyspace)
 session = cluster.connect(cassandra_keyspace)
 
 pools_svc_db = client['pool-service']
-event_svc_db = client['event-service']
-ingestion_gen_db = client['ingestion-gen']
-wallet_svc_db = client['wallet-service']
-hr_ingestion_gen_db = client['horseracing-generation']
-auth_svc_db = client['auth-service']
-
-
-events_coll = event_svc_db['events']
 pools_coll = pools_svc_db['pools']
 entries_coll = pools_svc_db['entries']
-ingestion_event_coll = ingestion_gen_db['event']
-hr_ingestion_event_coll = hr_ingestion_gen_db['events']
-transactions_coll = wallet_svc_db['transactions']
 lineups_coll = pools_svc_db['lineups']
+
+event_svc_db = client['event-service']
+events_coll = event_svc_db['events']
+
+ingestion_gen_db = client['ingestion-gen']
+ingestion_event_coll = ingestion_gen_db['event']
+
+wallet_svc_db = client['wallet-service']
+transactions_coll = wallet_svc_db['transactions']
+
+hr_ingestion_gen_db = client['horseracing-generation']
+hr_ingestion_event_coll = hr_ingestion_gen_db['events']
+
+auth_svc_db = client['auth-service']
 auth_role_coll = auth_svc_db['roles']
 auth_principal_coll = auth_svc_db['principals']
 
-bot_ids = set()
+bot_ids = []
 bot_roles = list(auth_role_coll.find({"name": "bot"}))
 
 if len(bot_roles) > 0:
     bot_role = bot_roles[0]
     bot_role_id = str(bot_role.get('_id'))
     bots = auth_principal_coll.find({"roles": bot_role_id})
-    bot_ids = list(set(map(lambda x: str(x.get("_id")), bots)))
+    for bot in bots:
+        if '_id' in bot:
+            bot_ids.append(str(bot['_id']))
 
+def filter_out_entries(entries):
+    return_list = []
+    for entry in entries:
+        if 'userId' in entry and bot_ids.get(entry['userId']) is None:
+            return_list.append(entry)
 
-
-non_bot_entries = entries_coll.find({"userId": {"$nin": bot_ids}}, {"_id": 1})
-non_bot_entry_oids = []
-
-for entry in non_bot_entries:
-    if '_id' in entry:
-        non_bot_entry_oids.append(entry['_id'])
-
-non_bot_entry_count = len(non_bot_entry_oids)
-non_bot_chunks = [
-    non_bot_entry_oids[i : i+query_chunk_size]
-        for i in range(0, len(non_bot_entry_oids), query_chunk_size)
- ]
+    return return_list
 
 all_pool_ids = {}
 all_event_ids = {}
@@ -103,16 +101,23 @@ def split_into_hr_csgo_ids(ids):
     return (hr_ids, csgo_ids)
 
 
-bar = progressbar.ProgressBar()
+number_of_entries = entries_coll.count({"userId": {"$nin": bot_ids}})
 
-print(f"Processing {non_bot_entry_count} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
-for entry_chunk_idx in bar(non_bot_chunks):
-    entries = list(entries_coll.find({"_id": {"$in": entry_chunk_idx}}))
-    print(f"Processing {len(entries)} entries from {entry_chunk_idx[0]}")
+bar = progressbar.ProgressBar(max_value=100)
+
+print(f"Processing {number_of_entries} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
+total_processed = 0
+max_object = objectid.ObjectId("000000000000000000000000")
+
+while True:
+    entries = list(entries_coll.find({"_id": {"$gt": max_object}, "userId": {"$nin": bot_ids}}, limit=query_chunk_size).sort("_id", pymongo.ASCENDING))
+    entries_count = len(entries)
     pool_ids = set()
     event_ids = set()
     entry_ids = set()
     remote_ids = set()
+
+    max_object = entries[-1].get('_id')
 
     for entry in entries:
         pool_ids.add(str(entry.get('poolId')))
@@ -153,8 +158,6 @@ for entry_chunk_idx in bar(non_bot_chunks):
     for transaction in transactions:
         smart_picks_for_entries[transaction['metaData']['entryId']] = json.dumps(transaction['amount'])
 
-
-
     for entry in entries:
         default_pool = all_pool_ids.get(str(entry.get("poolId"))) or {}
         default_event = all_event_ids.get(str(entry.get("eventId"))) or {}
@@ -194,3 +197,12 @@ for entry_chunk_idx in bar(non_bot_chunks):
             user_history_listing["status"] = default_event.get("status")
         # print_json(user_history_listing)
         store_cassandra_entry(session, user_history_listing)
+
+    total_processed += entries_count
+
+    if entries_count < query_chunk_size:
+        bar.update(100)
+        break
+    else:
+        percent_complete = int((total_processed/number_of_entries) * 100)
+        bar.update(percent_complete)
