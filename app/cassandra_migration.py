@@ -43,7 +43,7 @@ auth_svc_db = client['auth-service']
 auth_role_coll = auth_svc_db['roles']
 auth_principal_coll = auth_svc_db['principals']
 
-bot_ids = []
+bot_ids = {}
 bot_roles = list(auth_role_coll.find({"name": "bot"}))
 
 if len(bot_roles) > 0:
@@ -52,7 +52,7 @@ if len(bot_roles) > 0:
     bots = auth_principal_coll.find({"roles": bot_role_id})
     for bot in bots:
         if '_id' in bot:
-            bot_ids.append(str(bot['_id']))
+            bot_ids[str(bot['_id'])] = 1
 
 def filter_out_entries(entries):
     return_list = []
@@ -101,23 +101,19 @@ def split_into_hr_csgo_ids(ids):
     return (hr_ids, csgo_ids)
 
 
-number_of_entries = entries_coll.count({"userId": {"$nin": bot_ids}})
+number_of_entries = entries_coll.count()
 
 bar = progressbar.ProgressBar(max_value=100)
 
 print(f"Processing {number_of_entries} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
-total_processed = 0
-max_object = objectid.ObjectId("000000000000000000000000")
 
-while True:
-    entries = list(entries_coll.find({"_id": {"$gt": max_object}, "userId": {"$nin": bot_ids}}, limit=query_chunk_size).sort("_id", pymongo.ASCENDING))
+for entry_idx in bar(range(entry_idx_start, number_of_entries, query_chunk_size)):
+    entries = list(entries_coll.find(skip=entry_idx, limit=query_chunk_size))
     entries_count = len(entries)
     pool_ids = set()
     event_ids = set()
     entry_ids = set()
     remote_ids = set()
-
-    max_object = entries[-1].get('_id')
 
     for entry in entries:
         pool_ids.add(str(entry.get('poolId')))
@@ -159,50 +155,41 @@ while True:
         smart_picks_for_entries[transaction['metaData']['entryId']] = json.dumps(transaction['amount'])
 
     for entry in entries:
-        default_pool = all_pool_ids.get(str(entry.get("poolId"))) or {}
-        default_event = all_event_ids.get(str(entry.get("eventId"))) or {}
-        meta_data = all_remote_ids.get(default_event.get("remoteId")) or all_remote_ids.get(str(default_event.get("_id")))
-        meta_data_str = None
-        if meta_data is not None:
-            meta_data_str = json.dumps(meta_data)
+        if 'userId' in entry and bot_ids.get(entry['userId']) is None:
+            default_pool = all_pool_ids.get(str(entry.get("poolId"))) or {}
+            default_event = all_event_ids.get(str(entry.get("eventId"))) or {}
+            meta_data = all_remote_ids.get(default_event.get("remoteId")) or all_remote_ids.get(str(default_event.get("_id")))
+            meta_data_str = None
+            if meta_data is not None:
+                meta_data_str = json.dumps(meta_data)
 
-        pool_id = str(entry.get("poolId"))
-        entry_id = str(entry.get("_id"))
-        rank = find_lineup_rank_by_entry_id(
-            all_lineups_by_pool_id.get(pool_id, {}).get('_embedded', {}).get("lineups", []), entry_id)
-        leaderboard_str = memoized_pool(pool_id)
-        user_history_listing = {
-                "userId": entry.get("userId"),
-                "poolId": pool_id,
-                "eventId": entry.get("eventId"),
-                "entryId": entry_id,
-                "challengeName": default_pool.get("name"),
-                "challengeRules": set(pool_rules(default_pool)),
-                "eventName": default_event.get("name"),
-                "eventDate": default_event.get("startDate"),
-                "poolSize": default_pool.get("poolSize"),
-                "metaData": meta_data_str,
-                "leaderboard": leaderboard_str,
-                "rank": rank,
-                "smartPicksWon": smart_picks_for_entries.get(entry_id),
-                "won": smart_picks_for_entries.get(str(entry.get("_id"))) is not None,
-                "discipline": default_event.get("discipline"),
-                "status": None
-        }
-        if default_pool.get("status") == "Canceled":
-            user_history_listing["status"] = "Canceled"
-        elif default_pool.get("status") == "Past":
-            user_history_listing["status"] = "Complete"
-        else:
-            user_history_listing["status"] = default_event.get("status")
-        # print_json(user_history_listing)
-        store_cassandra_entry(session, user_history_listing)
-
-    total_processed += entries_count
-
-    if entries_count < query_chunk_size:
-        bar.update(100)
-        break
-    else:
-        percent_complete = int((total_processed/number_of_entries) * 100)
-        bar.update(percent_complete)
+            pool_id = str(entry.get("poolId"))
+            entry_id = str(entry.get("_id"))
+            rank = find_lineup_rank_by_entry_id(
+                all_lineups_by_pool_id.get(pool_id, {}).get('_embedded', {}).get("lineups", []), entry_id)
+            leaderboard_str = memoized_pool(pool_id)
+            user_history_listing = {
+                    "userId": entry.get("userId"),
+                    "poolId": pool_id,
+                    "eventId": entry.get("eventId"),
+                    "entryId": entry_id,
+                    "challengeName": default_pool.get("name"),
+                    "challengeRules": set(pool_rules(default_pool)),
+                    "eventName": default_event.get("name"),
+                    "eventDate": default_event.get("startDate"),
+                    "poolSize": default_pool.get("poolSize"),
+                    "metaData": meta_data_str,
+                    "leaderboard": leaderboard_str,
+                    "rank": rank,
+                    "smartPicksWon": smart_picks_for_entries.get(entry_id),
+                    "won": smart_picks_for_entries.get(str(entry.get("_id"))) is not None,
+                    "discipline": default_event.get("discipline"),
+                    "status": None
+            }
+            if default_pool.get("status") == "Canceled":
+                user_history_listing["status"] = "Canceled"
+            elif default_pool.get("status") == "Past":
+                user_history_listing["status"] = "Complete"
+            else:
+                user_history_listing["status"] = default_event.get("status")
+            store_cassandra_entry(session, user_history_listing)

@@ -2,7 +2,13 @@ import pymongo
 from pymongo import MongoClient
 from bson import json_util
 import datetime
+from cassandra import WriteTimeout, ConsistencyLevel
+from cassandra.query import SimpleStatement
+import logging
 
+logging.basicConfig(filename='/tmp/cassandra-log.out', level=logging.DEBUG)
+
+default_consistency = ConsistencyLevel.ANY
 
 def create_keyspace_and_table(session, keyspace):
     session.execute(
@@ -48,18 +54,28 @@ def create_keyspace_and_table(session, keyspace):
             """.format(keyspace)
     )
 
+cassandra_insert_stmt = SimpleStatement(
+    """
+        INSERT INTO usercontesthistoryrepository (userid, poolid, challengename, challengerules, entryid, eventdate, eventid,
+         eventname, leaderboard, metadata, poolsize, rank, smartpickswon, status, won, discipline)
+            VALUES (%(userId)s, %(poolId)s, %(challengeName)s, %(challengeRules)s, %(entryId)s, %(eventDate)s, %(eventId)s, %(eventName)s,
+             %(leaderboard)s, %(metaData)s, %(poolSize)s, %(rank)s, %(smartPicksWon)s, %(status)s, %(won)s, %(discipline)s)
+    """, consistency_level=default_consistency
+)
 
 def store_cassandra_entry(session, user_contest_history):
-    session.execute(
-        """
-            INSERT INTO usercontesthistoryrepository (userid, poolid, challengename, challengerules, entryid, eventdate, eventid,
-             eventname, leaderboard, metadata, poolsize, rank, smartpickswon, status, won, discipline)
-                VALUES (%(userId)s, %(poolId)s, %(challengeName)s, %(challengeRules)s, %(entryId)s, %(eventDate)s, %(eventId)s, %(eventName)s,
-                 %(leaderboard)s, %(metaData)s, %(poolSize)s, %(rank)s, %(smartPicksWon)s, %(status)s, %(won)s, %(discipline)s)
-        """,
-        user_contest_history
+    session.execute_async(cassandra_insert_stmt, user_contest_history)
 
-    )
+def store_cassandra_entry_retry(session, user_contest_history, max_retries=5):
+    future_session = session.execute_async(cassandra_insert_stmt, user_contest_history)
+    try:
+        future_session.result()
+    except WriteTimeout:
+        if max_retries > 0:
+            print(f"Cassandra store failed. {max_retries} attempts left.")
+            store_cassandra_entry(session, user_contest_history, consistency_level, max_retries - 1)
+        else:
+            print("Cassandra store failed. 0 retries left. Quitting")
 
 
 def pool_rules(pool):
