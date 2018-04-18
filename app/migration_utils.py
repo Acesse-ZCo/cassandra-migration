@@ -35,6 +35,7 @@ def create_keyspace_and_table(session, keyspace):
             status text,
             won boolean,
             discipline text,
+            isconsistent boolean,
             PRIMARY KEY (userid, poolid)
         ) WITH CLUSTERING ORDER BY (poolid ASC)
             AND bloom_filter_fp_chance = 0.01
@@ -53,13 +54,19 @@ def create_keyspace_and_table(session, keyspace):
             AND speculative_retry = '99PERCENTILE';
             """.format(keyspace)
     )
+    session.execute(
+        """
+        CREATE INDEX IF NOT EXISTS is_consistent_idx ON {}.usercontesthistoryrepository (isconsistent)
+        """.format(keyspace)
+    )
+
 
 cassandra_insert_stmt = SimpleStatement(
     """
         INSERT INTO usercontesthistoryrepository (userid, poolid, challengename, challengerules, entryid, eventdate, eventid,
-         eventname, leaderboard, metadata, poolsize, rank, smartpickswon, status, won, discipline)
+         eventname, leaderboard, metadata, poolsize, rank, smartpickswon, status, won, discipline, isconsistent)
             VALUES (%(userId)s, %(poolId)s, %(challengeName)s, %(challengeRules)s, %(entryId)s, %(eventDate)s, %(eventId)s, %(eventName)s,
-             %(leaderboard)s, %(metaData)s, %(poolSize)s, %(rank)s, %(smartPicksWon)s, %(status)s, %(won)s, %(discipline)s)
+             %(leaderboard)s, %(metaData)s, %(poolSize)s, %(rank)s, %(smartPicksWon)s, %(status)s, %(won)s, %(discipline)s, True)
     """, consistency_level=default_consistency
 )
 
