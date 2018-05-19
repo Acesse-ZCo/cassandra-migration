@@ -1,0 +1,29 @@
+version: '2.1'
+services:
+  cassandra-seed:
+      container_name: cassandra-seed-node
+      image: cassandra:3.11
+      environment:
+          - "CASSANDRA_START_RPC=true"
+      ports:
+          - "9042:9042"
+          - "7199:7199"
+          - "9160:9160"
+  cassandra-node-1:
+        image: cassandra:3.11
+        command: /bin/bash -c "echo 'Waiting for seed node' && sleep 30 && /docker-entrypoint.sh cassandra -f"
+        ports:
+            - "9142:9042"
+        links:
+            - cassandra-seed
+        environment:
+             - "CASSANDRA_SEEDS=cassandra-seed-node"
+  cassandra-node-2:
+          image: cassandra:3.11
+          command: /bin/bash -c "echo 'Waiting for seed node' && sleep 30 && /docker-entrypoint.sh cassandra -f"
+          ports:
+              - "9242:9042"
+          links:
+              - cassandra-seed
+          environment:
+               - "CASSANDRA_SEEDS=cassandra-seed-node"

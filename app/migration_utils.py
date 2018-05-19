@@ -70,8 +70,11 @@ cassandra_insert_stmt = SimpleStatement(
     """, consistency_level=default_consistency
 )
 
-def store_cassandra_entry(session, user_contest_history):
-    session.execute_async(cassandra_insert_stmt, user_contest_history)
+def store_cassandra_entry(session, user_contest_history, async=False):
+    if async:
+        store_cassandra_entry_retry(session, user_contest_history)
+    else:
+        session.execute(cassandra_insert_stmt, user_contest_history)
 
 def store_cassandra_entry_retry(session, user_contest_history, max_retries=5):
     future_session = session.execute_async(cassandra_insert_stmt, user_contest_history)

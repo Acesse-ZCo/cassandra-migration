@@ -9,23 +9,52 @@ import progressbar
 import logging
 from tqdm import tqdm
 import psutil
+import socket
 from cachetools import LRUCache
+from dateutil.parser import parse
+import datetime
 
 my_proc = psutil.Process(os.getpid())
 mongo_url = os.environ['MONGO_URL']
 
+
 query_chunk_size = int(os.getenv('QUERY_CHUNK_SIZE', '100'))
 entry_idx_start = int(os.getenv('ENTRY_IDX_START', 0))
 
-cassandra_url = os.getenv('CASSANDRA_URL', 'localhost')
-print(f"CASSANDRA_URL = {cassandra_url}")
+cassandra_url = os.getenv('CASSANDRA_URL', 'cassandra')
+
+cassandra_urls = socket.gethostbyname_ex(cassandra_url)[2]
+print(f"CASSANDRA_URL = {cassandra_urls}")
+client = pymongo.MongoClient(mongo_url, ssl=True, username=os.environ['MONGO_USERNAME'], password=os.environ['MONGO_PASSWORD'])
+cluster = Cluster(cassandra_urls)
 cassandra_keyspace = os.getenv('CASSANDRA_KEYSPACE', 'pool_history')
 
-client = pymongo.MongoClient(mongo_url, ssl=True, username=os.environ['MONGO_USERNAME'], password=os.environ['MONGO_PASSWORD'])
-cluster = Cluster([cassandra_url])
-session = cluster.connect()
-create_keyspace_and_table(session, cassandra_keyspace)
-session = cluster.connect(cassandra_keyspace)
+start_date = os.getenv('START_DATE')
+if start_date is not None:
+    start_date = parse(start_date)
+
+entry_id = os.getenv('ENTRY_ID')
+
+query_obj = {}
+
+if start_date is not None:
+    query_obj["zonedDateTime"] = {"$lt": start_date}
+
+if entry_id is not None:
+    query_obj["userId"] = entry_id
+
+write_async = os.getenv('WRITE_ASYNC')
+
+if write_async == 'true':
+    write_async = True
+else:
+    write_async = False
+
+cassandra_session = cluster.connect()
+create_keyspace_and_table(cassandra_session, cassandra_keyspace)
+cassandra_session = cluster.connect(cassandra_keyspace)
+
+
 
 pools_svc_db = client['pool-service']
 pools_coll = pools_svc_db['pools']
@@ -108,17 +137,16 @@ def split_into_hr_csgo_ids(ids):
     return (hr_ids, csgo_ids)
 
 
-number_of_entries = entries_coll.count()
+number_of_entries = entries_coll.count(query_obj)
 
 bar = progressbar.ProgressBar(max_value=100)
-
 
 print(f"Processing {number_of_entries} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
 entries_processed = 0
 with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar:
     tq_bar.set_description('TOT MEM %dMB, MEM%%: %3.2f, Entries Processed: %d' % (my_proc.memory_info()[0]/(2**20), my_proc.memory_percent(), entries_processed))
     for entry_idx in tq_bar:
-        entries = list(entries_coll.find(skip=entry_idx, limit=query_chunk_size))
+        entries = list(entries_coll.find(query_obj, skip=entry_idx, limit=query_chunk_size))
         entries_count = len(entries)
         pool_ids = set()
         event_ids = set()
@@ -140,7 +168,10 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
         if len(missing_event_ids) > 0:
             for event in events_coll.find({'_id': {"$in": missing_event_ids}}):
                 all_event_ids[str(event.get("_id"))] = event
-                remote_ids.add(event.get("remoteId"))
+                if event.get("discipline") == "HR" and "remoteId" in event:
+                    all_remote_ids[event["remoteId"]] = event.get("metaData")
+                else:
+                    remote_ids.add(event.get("remoteId"))
 
         missing_remote_ids = remote_ids.difference(set(all_remote_ids.keys()))
 
@@ -150,10 +181,10 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
                 for ingestion_event in ingestion_event_coll.find({"identifier": {"$in": list(csgo_remote_ids)}}):
                     identifier = ingestion_event['identifier']
                     all_remote_ids[identifier] = ingestion_event['metaData']
-            if(len(hr_remote_ids) > 0):
-                for hr_ingestion_event in hr_ingestion_event_coll.find({"remoteId": {"$in": list(hr_remote_ids)}}):
-                    identifier = hr_ingestion_event['remoteId']
-                    all_remote_ids[identifier] = hr_ingestion_event['metaData']
+            # if(len(hr_remote_ids) > 0):
+            #     for hr_ingestion_event in hr_ingestion_event_coll.find({"remoteId": {"$in": list(hr_remote_ids)}}):
+            #         identifier = hr_ingestion_event['remoteId']
+            #         all_remote_ids[identifier] = hr_ingestion_event['metaData']
 
         smart_picks_for_entries = {}
 
@@ -198,14 +229,14 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
                         "status": None
                 }
                 if default_pool.get("status") == "Canceled":
-                    user_history_listing["status"] = "Canceled"
+                    user_history_listing["status"] = "Cancelled"
                 elif default_pool.get("status") == "Past":
-                    user_history_listing["status"] = "Complete"
+                    user_history_listing["status"] = "Completed"
                 else:
                     user_history_listing["status"] = default_event.get("status")
-                store_cassandra_entry(session, user_history_listing)
+                store_cassandra_entry(cassandra_session, user_history_listing, async=write_async)
                 entries_processed += 1
                 if(entries_processed % 10 == 0):
                     tq_bar.set_description('TOT MEM %dMB, MEM%%: %3.2f, Entries Processed: %d' % (my_proc.memory_info()[0]/(2**20), my_proc.memory_percent(), entries_processed))
 
-print(f"Processed {entries_processed} entries_coll")
+print(f"Processed {entries_processed} entries")
