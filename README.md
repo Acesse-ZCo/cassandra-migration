@@ -1,6 +1,6 @@
 ## Cassandra Migration Tool
 
-####Run as a docker container
+#### Run as a docker container
 ```
 docker run \
   -e MONGO_URL=<mongo_url> \
