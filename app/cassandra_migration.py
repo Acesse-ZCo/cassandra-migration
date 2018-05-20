@@ -50,6 +50,14 @@ if write_async == 'true':
 else:
     write_async = False
 
+user_mapping=os.getenv('USER_MAPPING')
+
+if user_mapping is not None or len(user_mapping.strip()) > 3:
+    user_mapping_list = list(map(lambda x: x.strip().split(":"), user_mapping.split(',')))
+    filtered_user_mapping_list = list(filter(lambda x: len(x) == 2, user_mapping_list))
+    user_mapping = dict({(x[0].strip(), x[1].strip()) for x in filtered_user_mapping_list})
+
+
 cassandra_session = cluster.connect()
 create_keyspace_and_table(cassandra_session, cassandra_keyspace)
 cassandra_session = cluster.connect(cassandra_keyspace)
@@ -210,8 +218,12 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
                 rank = find_lineup_rank_by_entry_id(
                     all_lineups_by_pool_id.get(pool_id, {}).get('_embedded', {}).get("lineups", []), entry_id)
                 leaderboard_str = memoized_pool(pool_id)
+                default_entry_id = entry.get("userId")
+                if user_mapping is not None and default_entry_id in user_mapping:
+                    default_entry_id = user_mapping[default_entry_id]
+
                 user_history_listing = {
-                        "userId": entry.get("userId"),
+                        "userId": default_entry_id,
                         "poolId": pool_id,
                         "eventId": entry.get("eventId"),
                         "entryId": entry_id,
@@ -228,9 +240,9 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
                         "discipline": default_event.get("discipline"),
                         "status": None
                 }
-                if default_pool.get("status") == "Canceled":
+                if default_event.get("status") == "Canceled":
                     user_history_listing["status"] = "Cancelled"
-                elif default_pool.get("status") == "Past":
+                elif default_event.get("status") == "Past":
                     user_history_listing["status"] = "Completed"
                 else:
                     user_history_listing["status"] = default_event.get("status")

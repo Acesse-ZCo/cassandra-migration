@@ -11,6 +11,7 @@ docker run \
   -e CASSANDRA_KEYSPACE=<cassandra_keyspace> \
   -e ENTRY_ID=<entry_id> \
   -e WRITE_ASYNC=false \
+  -e USER_MAPPING=user1:mapped_user1,user2:mapped_user2
   041479780340.dkr.ecr.us-east-1.amazonaws.com/zco/asports/cassandra-migration:0.0.1"
 ```
 
@@ -25,3 +26,4 @@ docker run \
 * ENTRY_ID - optional comma separated list of entries to migrate
 * WRITE_ASYNC - used to optionally write cassandra entries asychronously. Defaults to false
 * QUERY_CHUNK_SIZE - number of entries processed per iteration. Defaults to 100
+* USER_MAPPING - maps entry user ids to desired user ids
