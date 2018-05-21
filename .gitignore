@@ -3,4 +3,5 @@ __pycache__
 *.swp
 .properties
 .DS_Store
+*.iml
 .idea/

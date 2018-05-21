@@ -185,7 +185,7 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
 
         if len(missing_remote_ids) > 0:
             (hr_remote_ids, csgo_remote_ids) = split_into_hr_csgo_ids(missing_remote_ids)
-            if(len(csgo_remote_ids) > 0):
+            if len(csgo_remote_ids) > 0:
                 for ingestion_event in ingestion_event_coll.find({"identifier": {"$in": list(csgo_remote_ids)}}):
                     identifier = ingestion_event['identifier']
                     all_remote_ids[identifier] = ingestion_event['metaData']
@@ -211,6 +211,8 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
                 meta_data = all_remote_ids.get(default_event.get("remoteId")) or all_remote_ids.get(str(default_event.get("_id")))
                 meta_data_str = None
                 if meta_data is not None:
+                    if meta_data.get('roundType') is None:
+                        meta_data['roundType'] = 'N/A'
                     meta_data_str = json.dumps(meta_data)
 
                 pool_id = str(entry.get("poolId"))
