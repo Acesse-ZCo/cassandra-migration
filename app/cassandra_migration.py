@@ -52,7 +52,7 @@ else:
 
 user_mapping=os.getenv('USER_MAPPING')
 
-if user_mapping is not None or len(user_mapping.strip()) > 3:
+if user_mapping is not None and len(user_mapping.strip()) > 3:
     user_mapping_list = list(map(lambda x: x.strip().split(":"), user_mapping.split(',')))
     filtered_user_mapping_list = list(filter(lambda x: len(x) == 2, user_mapping_list))
     user_mapping = dict({(x[0].strip(), x[1].strip()) for x in filtered_user_mapping_list})
