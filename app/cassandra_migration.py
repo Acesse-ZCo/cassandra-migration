@@ -202,7 +202,15 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
         transactions = list(transactions_coll.find({'txnType': "Credit", "metaData.entryId": {"$in": list(entry_ids)}}))
 
         for transaction in transactions:
-            smart_picks_for_entries[transaction['metaData']['entryId']] = json.dumps(transaction['amount'])
+            amount = transaction.get('amount')
+
+            if amount is not None:
+                amount_value = amount.get('amount')
+                if amount_value is not None:
+                    amount_value = round(amount_value/1000)
+                amount['amount'] = amount_value
+
+            smart_picks_for_entries[transaction['metaData']['entryId']] = json.dumps(amount)
 
         for entry in entries:
             if 'userId' in entry and bot_ids.get(entry['userId']) is None:
