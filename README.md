@@ -29,7 +29,6 @@ swarm service create  --restart-condition none \
     --env QUERY_CHUNK_SIZE=17000 \
     --env CASSANDRA_URL=tasks.cassandra \
     --env CASSANDRA_KEYSPACE='pool_history' \
-    --env WRITE_ASYNC=false \
     --env ENTRY_ID=<entry_id> \
     --env WRITE_ASYNC=false \
     --env USER_MAPPING=user1:mapped_user1,user2:mapped_user2
