@@ -14,7 +14,7 @@ from cachetools import LRUCache
 from dateutil.parser import parse
 import datetime
 import time
-
+import re
 my_proc = psutil.Process(os.getpid())
 mongo_url = os.environ['MONGO_URL']
 
@@ -154,6 +154,8 @@ number_of_entries = entries_coll.count(query_obj)
 
 bar = progressbar.ProgressBar(max_value=100)
 
+prize_regex = re.compile("^Prize\sAward")
+
 print(f"Processing {number_of_entries} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
 entries_processed = 0
 with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar:
@@ -205,9 +207,8 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
         agg_transactions = list(
            transactions_coll.aggregate([
                {"$match": {"userId": {"$in": list(user_ids)}}},
-               {"$match": {"metaData.entryId": {"$in": list(entry_ids)}}},
-               {"$match": {"txnType": "Credit"}}
-
+               {"$match": {"metaData.entryId": {"$in": list(entry_ids)}, "txnType": "Credit"}},
+               {"$match": {"$or": [{"metaData.code": "1100"}, {"desc": {"$regex": prize_regex}}]}}
            ]))
 
 
