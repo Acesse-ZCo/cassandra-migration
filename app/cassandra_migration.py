@@ -13,6 +13,7 @@ import socket
 from cachetools import LRUCache
 from dateutil.parser import parse
 import datetime
+import time
 
 my_proc = psutil.Process(os.getpid())
 mongo_url = os.environ['MONGO_URL']
@@ -96,13 +97,15 @@ if len(bot_roles) > 0:
         if '_id' in bot:
             bot_ids[str(bot['_id'])] = 1
 
-def filter_out_entries(entries):
+
+def filter_out_entries(entries_list):
     return_list = []
-    for entry in entries:
-        if 'userId' in entry and bot_ids.get(entry['userId']) is None:
-            return_list.append(entry)
+    for list_entry in entries_list:
+        if 'userId' in list_entry and bot_ids.get(list_entry['userId']) is None:
+            return_list.append(list_entry)
 
     return return_list
+
 
 max_cache_size = 50000
 
@@ -134,6 +137,7 @@ def find_lineup_rank_by_entry_id(lineups, entry_id):
             return lineup.get("rank")
     return None
 
+
 def split_into_hr_csgo_ids(ids):
     hr_ids = set()
     csgo_ids = set()
@@ -142,7 +146,8 @@ def split_into_hr_csgo_ids(ids):
             csgo_ids.add(id)
         else:
             hr_ids.add(id)
-    return (hr_ids, csgo_ids)
+
+    return hr_ids, csgo_ids
 
 
 number_of_entries = entries_coll.count(query_obj)
@@ -160,12 +165,14 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
         event_ids = set()
         entry_ids = set()
         remote_ids = set()
+        user_ids = set()
 
         for entry in entries:
             if 'userId' in entry and bot_ids.get(entry['userId']) is None:
                 pool_ids.add(str(entry.get('poolId')))
                 event_ids.add(str(entry.get('eventId')))
                 entry_ids.add(str(entry.get('_id')))
+                user_ids.add(entry.get('userId'))
 
         missing_pool_ids = [objectid.ObjectId(p) for p in list(pool_ids.difference(set(all_pool_ids.keys())))]
         missing_event_ids = [objectid.ObjectId(e) for e in list(event_ids.difference(set(all_event_ids.keys())))]
@@ -189,19 +196,20 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
                 for ingestion_event in ingestion_event_coll.find({"identifier": {"$in": list(csgo_remote_ids)}}):
                     identifier = ingestion_event['identifier']
                     all_remote_ids[identifier] = ingestion_event['metaData']
-            # if(len(hr_remote_ids) > 0):
-            #     for hr_ingestion_event in hr_ingestion_event_coll.find({"remoteId": {"$in": list(hr_remote_ids)}}):
-            #         identifier = hr_ingestion_event['remoteId']
-            #         all_remote_ids[identifier] = hr_ingestion_event['metaData']
 
         smart_picks_for_entries = {}
 
         lineup_by_pool_id = lineups_by_pool_ids(lineups_coll, missing_pool_ids)
         all_lineups_by_pool_id.update(lineup_by_pool_id)
 
-        transactions = list(transactions_coll.find({'txnType': "Credit", "metaData.entryId": {"$in": list(entry_ids)}}))
+        agg_transactions = list(
+            transactions_coll.aggregate([
+                {"$match": {"userId": {"$in": list(user_ids)}}},
+                {"$match": {"txnType": "Credit"}},
+                {"$match": {"metaData.entryId": {"$in": list(entry_ids)}}},
+            ]))
 
-        for transaction in transactions:
+        for transaction in agg_transactions:
             amount = transaction.get('amount')
 
             if amount is not None:
@@ -258,7 +266,8 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
                     user_history_listing["status"] = default_event.get("status")
                 store_cassandra_entry(cassandra_session, user_history_listing, async=write_async)
                 entries_processed += 1
-                if(entries_processed % 10 == 0):
+
+                if entries_processed % 10 == 0:
                     tq_bar.set_description('TOT MEM %dMB, MEM%%: %3.2f, Entries Processed: %d' % (my_proc.memory_info()[0]/(2**20), my_proc.memory_percent(), entries_processed))
 
 print(f"Processed {entries_processed} entries")
