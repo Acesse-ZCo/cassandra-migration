@@ -14,6 +14,7 @@ docker run \
   -e ENTRY_ID=<entry_id> \
   -e WRITE_ASYNC=false \
   -e USER_MAPPING=user1:mapped_user1,user2:mapped_user2
+  -e START_DATE="YYYY-MM-DD hh:mm:ss" \
   041479780340.dkr.ecr.us-east-1.amazonaws.com/zco/asports/cassandra-migration:0.0.1"
 ```
 
@@ -31,7 +32,8 @@ swarm service create  --restart-condition none \
     --env CASSANDRA_KEYSPACE='pool_history' \
     --env ENTRY_ID=<entry_id> \
     --env WRITE_ASYNC=false \
-    --env USER_MAPPING=user1:mapped_user1,user2:mapped_user2
+    --env USER_MAPPING=user1:mapped_user1,user2:mapped_user2 \
+    --env START_DATE="YYYY-MM-DD hh:mm:ss"
     --replicas 1 \
         041479780340.dkr.ecr.us-east-1.amazonaws.com/zco/asports/cassandra-migration:0.0.1"
 
@@ -50,3 +52,4 @@ swarm service create  --restart-condition none \
 * WRITE_ASYNC - used to optionally write cassandra entries asychronously to improve performance. Defaults to false
 * QUERY_CHUNK_SIZE - number of entries processed per iteration. Defaults to 100
 * USER_MAPPING - maps entry user ids to desired user ids
+* START_DATE - iso formatted date before which entries should be processed.
