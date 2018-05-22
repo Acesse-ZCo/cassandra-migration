@@ -202,7 +202,6 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
         lineup_by_pool_id = lineups_by_pool_ids(lineups_coll, missing_pool_ids)
         all_lineups_by_pool_id.update(lineup_by_pool_id)
 
-        agg_start_time = time.time()
         agg_transactions = list(
            transactions_coll.aggregate([
                {"$match": {"userId": {"$in": list(user_ids)}}},
@@ -210,8 +209,8 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
                {"$match": {"txnType": "Credit"}}
 
            ]))
-        agg_end_time = time.time()
-        print("Time to process ", len(agg_transactions), " transactions: ", agg_end_time - agg_start_time, " seconds")
+
+
 
         # find_start_time = time.time()
         # find_transactions = list(
@@ -240,8 +239,6 @@ with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar
         #
         # print("Time to process ", len(find_transactions), " transactions: ",
         #       find_end_time - find_start_time, " seconds")
-
-        #for transaction in find_transactions:
 
         for transaction in agg_transactions:
             amount = transaction.get('amount')
