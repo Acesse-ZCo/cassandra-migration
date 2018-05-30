@@ -30,17 +30,15 @@ client = pymongo.MongoClient(mongo_url, ssl=True, username=os.environ['MONGO_USE
 cluster = Cluster(cassandra_urls)
 cassandra_keyspace = os.getenv('CASSANDRA_KEYSPACE', 'pool_history')
 
-start_date = os.getenv('START_DATE')
-if start_date is not None:
-    start_date = parse(start_date)
-
-entry_id = os.getenv('ENTRY_ID')
-
 query_obj = {}
 
+start_date = os.getenv('START_DATE')
 if start_date is not None:
-    query_obj["zonedDateTime"] = {"$lt": start_date}
+    if len(start_date) < 13:
+        start_date = start_date + "000"
+    query_obj["zonedDateTime"] = {"$lt": int(start_date)}
 
+entry_id = os.getenv('ENTRY_ID')
 if entry_id is not None:
     query_obj["userId"] = entry_id
 
@@ -62,8 +60,6 @@ if user_mapping is not None and len(user_mapping.strip()) > 3:
 cassandra_session = cluster.connect()
 create_keyspace_and_table(cassandra_session, cassandra_keyspace)
 cassandra_session = cluster.connect(cassandra_keyspace)
-
-
 
 pools_svc_db = client['pool-service']
 pools_coll = pools_svc_db['pools']
@@ -157,8 +153,10 @@ bar = progressbar.ProgressBar(max_value=100)
 prize_regex = re.compile("^Prize\sAward")
 
 print(f"Processing {number_of_entries} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
+if start_date is not None:
+
 entries_processed = 0
-with tqdm(range(entry_idx_start, number_of_entries, query_chunk_size)) as tq_bar:
+with tqdm(range(entry_idx_start * query_chunk_size, number_of_entries, query_chunk_size)) as tq_bar:
     tq_bar.set_description('TOT MEM %dMB, MEM%%: %3.2f, Entries Processed: %d' % (my_proc.memory_info()[0]/(2**20), my_proc.memory_percent(), entries_processed))
     for entry_idx in tq_bar:
         entries = list(entries_coll.find(query_obj, skip=entry_idx, limit=query_chunk_size))
