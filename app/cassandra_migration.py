@@ -153,7 +153,6 @@ bar = progressbar.ProgressBar(max_value=100)
 prize_regex = re.compile("^Prize\sAward")
 
 print(f"Processing {number_of_entries} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
-if start_date is not None:
 
 entries_processed = 0
 with tqdm(range(entry_idx_start * query_chunk_size, number_of_entries, query_chunk_size)) as tq_bar:
