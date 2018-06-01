@@ -155,148 +155,133 @@ prize_regex = re.compile("^Prize\sAward")
 print(f"Processing {number_of_entries} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
 
 entries_processed = 0
-with tqdm(range(entry_idx_start * query_chunk_size, number_of_entries, query_chunk_size)) as tq_bar:
+retry_count = 3
+with tqdm(range(0, number_of_entries, query_chunk_size), initial=entry_idx_start) as tq_bar:
     tq_bar.set_description('TOT MEM %dMB, MEM%%: %3.2f, Entries Processed: %d' % (my_proc.memory_info()[0]/(2**20), my_proc.memory_percent(), entries_processed))
-    for entry_idx in tq_bar:
-        entries = list(entries_coll.find(query_obj, skip=entry_idx, limit=query_chunk_size))
-        entries_count = len(entries)
-        pool_ids = set()
-        event_ids = set()
-        entry_ids = set()
-        remote_ids = set()
-        user_ids = set()
 
-        for entry in entries:
-            if 'userId' in entry and bot_ids.get(entry['userId']) is None:
-                pool_ids.add(str(entry.get('poolId')))
-                event_ids.add(str(entry.get('eventId')))
-                entry_ids.add(str(entry.get('_id')))
-                user_ids.add(entry.get('userId'))
+    while retry_count > 0:
+        try:
+            for entry_idx in tq_bar:
+                entries = list(entries_coll.find(query_obj, skip=entry_idx, limit=query_chunk_size))
+                entries_count = len(entries)
+                pool_ids = set()
+                event_ids = set()
+                entry_ids = set()
+                remote_ids = set()
+                user_ids = set()
 
-        missing_pool_ids = [objectid.ObjectId(p) for p in list(pool_ids.difference(set(all_pool_ids.keys())))]
-        missing_event_ids = [objectid.ObjectId(e) for e in list(event_ids.difference(set(all_event_ids.keys())))]
+                for entry in entries:
+                    if 'userId' in entry and bot_ids.get(entry['userId']) is None:
+                        pool_ids.add(str(entry.get('poolId')))
+                        event_ids.add(str(entry.get('eventId')))
+                        entry_ids.add(str(entry.get('_id')))
+                        user_ids.add(entry.get('userId'))
 
-        if len(missing_pool_ids) > 0:
-            for pool in pools_coll.find({'_id': {"$in": missing_pool_ids}}):
-                all_pool_ids[str(pool.get("_id"))] = pool
-        if len(missing_event_ids) > 0:
-            for event in events_coll.find({'_id': {"$in": missing_event_ids}}):
-                all_event_ids[str(event.get("_id"))] = event
-                if event.get("discipline") == "HR" and "remoteId" in event:
-                    all_remote_ids[event["remoteId"]] = event.get("metaData")
-                else:
-                    remote_ids.add(event.get("remoteId"))
+                missing_pool_ids = [objectid.ObjectId(p) for p in list(pool_ids.difference(set(all_pool_ids.keys())))]
+                missing_event_ids = [objectid.ObjectId(e) for e in list(event_ids.difference(set(all_event_ids.keys())))]
 
-        missing_remote_ids = remote_ids.difference(set(all_remote_ids.keys()))
+                if len(missing_pool_ids) > 0:
+                    for pool in pools_coll.find({'_id': {"$in": missing_pool_ids}}):
+                        all_pool_ids[str(pool.get("_id"))] = pool
+                if len(missing_event_ids) > 0:
+                    for event in events_coll.find({'_id': {"$in": missing_event_ids}}):
+                        all_event_ids[str(event.get("_id"))] = event
+                        if event.get("discipline") == "HR" and "remoteId" in event:
+                            all_remote_ids[event["remoteId"]] = event.get("metaData")
+                        else:
+                            remote_ids.add(event.get("remoteId"))
 
-        if len(missing_remote_ids) > 0:
-            (hr_remote_ids, csgo_remote_ids) = split_into_hr_csgo_ids(missing_remote_ids)
-            if len(csgo_remote_ids) > 0:
-                for ingestion_event in ingestion_event_coll.find({"identifier": {"$in": list(csgo_remote_ids)}}):
-                    identifier = ingestion_event['identifier']
-                    all_remote_ids[identifier] = ingestion_event['metaData']
+                missing_remote_ids = remote_ids.difference(set(all_remote_ids.keys()))
 
-        smart_picks_for_entries = {}
+                if len(missing_remote_ids) > 0:
+                    (hr_remote_ids, csgo_remote_ids) = split_into_hr_csgo_ids(missing_remote_ids)
+                    if len(csgo_remote_ids) > 0:
+                        for ingestion_event in ingestion_event_coll.find({"identifier": {"$in": list(csgo_remote_ids)}}):
+                            identifier = ingestion_event['identifier']
+                            all_remote_ids[identifier] = ingestion_event['metaData']
 
-        lineup_by_pool_id = lineups_by_pool_ids(lineups_coll, missing_pool_ids)
-        all_lineups_by_pool_id.update(lineup_by_pool_id)
+                smart_picks_for_entries = {}
 
-        agg_transactions = list(
-           transactions_coll.aggregate([
-               {"$match": {"userId": {"$in": list(user_ids)}}},
-               {"$match": {"metaData.entryId": {"$in": list(entry_ids)}, "txnType": "Credit"}},
-               {"$match": {"$or": [{"metaData.code": "1100"}, {"desc": {"$regex": prize_regex}}]}}
-           ]))
+                lineup_by_pool_id = lineups_by_pool_ids(lineups_coll, missing_pool_ids)
+                all_lineups_by_pool_id.update(lineup_by_pool_id)
 
+                agg_transactions = list(
+                   transactions_coll.aggregate([
+                       {"$match": {"userId": {"$in": list(user_ids)}}},
+                       {"$match": {"metaData.entryId": {"$in": list(entry_ids)}, "txnType": "Credit"}},
+                       {"$match": {"$or": [{"metaData.code": "1100"}, {"desc": {"$regex": prize_regex}}]}}
+                   ]))
 
+                for transaction in agg_transactions:
+                    amount = transaction.get('amount')
 
-        # find_start_time = time.time()
-        # find_transactions = list(
-        #     transactions_coll.find(
-        #         {
-        #             "userId": {"$in": list(user_ids)},
-        #             "txnType": "Credit",
-        #             "metaData.entryId": {"$in": list(entry_ids)}
-        #         }
-        #     )
-        # )
-        # find_end_time = time.time()
-        #
-        # print("Time to process ", len(find_transactions), " transactions: ",
-        #       find_end_time - find_start_time, " seconds")
+                    if amount is not None:
+                        amount_value = amount.get('amount')
+                        if amount_value is not None:
+                            amount_value = round(amount_value/1000)
+                        amount['amount'] = amount_value
 
-        # find_start_time = time.time()
-        # find_transactions = list(
-        #     transactions_coll.find(
-        #         {
-        #             "metaData.entryId": {"$in": list(entry_ids)}
-        #         }
-        #     )
-        # )
-        # find_end_time = time.time()
-        #
-        # print("Time to process ", len(find_transactions), " transactions: ",
-        #       find_end_time - find_start_time, " seconds")
+                    smart_picks_for_entries[transaction['metaData']['entryId']] = json.dumps(amount)
 
-        for transaction in agg_transactions:
-            amount = transaction.get('amount')
+                for entry in entries:
+                    if 'userId' in entry and bot_ids.get(entry['userId']) is None:
+                        default_pool = all_pool_ids.get(str(entry.get("poolId"))) or {}
+                        default_event = all_event_ids.get(str(entry.get("eventId"))) or {}
+                        meta_data = all_remote_ids.get(default_event.get("remoteId")) or all_remote_ids.get(str(default_event.get("_id")))
+                        meta_data_str = None
+                        if meta_data is not None:
+                            if meta_data.get('roundType') is None:
+                                meta_data['roundType'] = 'N/A'
+                            meta_data_str = json.dumps(meta_data)
 
-            if amount is not None:
-                amount_value = amount.get('amount')
-                if amount_value is not None:
-                    amount_value = round(amount_value/1000)
-                amount['amount'] = amount_value
+                        pool_id = str(entry.get("poolId"))
+                        entry_id = str(entry.get("_id"))
+                        rank = find_lineup_rank_by_entry_id(
+                            all_lineups_by_pool_id.get(pool_id, {}).get('_embedded', {}).get("lineups", []), entry_id)
+                        leaderboard_str = memoized_pool(pool_id)
+                        default_entry_id = entry.get("userId")
+                        if user_mapping is not None and default_entry_id in user_mapping:
+                            default_entry_id = user_mapping[default_entry_id]
 
-            smart_picks_for_entries[transaction['metaData']['entryId']] = json.dumps(amount)
+                        user_history_listing = {
+                                "userId": default_entry_id,
+                                "poolId": pool_id,
+                                "eventId": entry.get("eventId"),
+                                "entryId": entry_id,
+                                "challengeName": default_pool.get("name"),
+                                "challengeRules": set(pool_rules(default_pool)),
+                                "eventName": default_event.get("name"),
+                                "eventDate": default_event.get("startDate"),
+                                "poolSize": default_pool.get("poolSize"),
+                                "metaData": meta_data_str,
+                                "leaderboard": leaderboard_str,
+                                "rank": rank,
+                                "smartPicksWon": smart_picks_for_entries.get(entry_id),
+                                "won": smart_picks_for_entries.get(str(entry.get("_id"))) is not None,
+                                "discipline": default_event.get("discipline"),
+                                "status": None
+                        }
+                        if default_event.get("status") == "Canceled":
+                            user_history_listing["status"] = "Cancelled"
+                        elif default_event.get("status") == "Past":
+                            user_history_listing["status"] = "Completed"
+                        else:
+                            user_history_listing["status"] = default_event.get("status")
+                        store_cassandra_entry(cassandra_session, user_history_listing, async=write_async)
+                        entries_processed += 1
 
-        for entry in entries:
-            if 'userId' in entry and bot_ids.get(entry['userId']) is None:
-                default_pool = all_pool_ids.get(str(entry.get("poolId"))) or {}
-                default_event = all_event_ids.get(str(entry.get("eventId"))) or {}
-                meta_data = all_remote_ids.get(default_event.get("remoteId")) or all_remote_ids.get(str(default_event.get("_id")))
-                meta_data_str = None
-                if meta_data is not None:
-                    if meta_data.get('roundType') is None:
-                        meta_data['roundType'] = 'N/A'
-                    meta_data_str = json.dumps(meta_data)
+                        if entries_processed % 10 == 0:
+                            tq_bar.set_description('TOT MEM %dMB, MEM%%: %3.2f, Entries Processed: %d' % (my_proc.memory_info()[0]/(2**20), my_proc.memory_percent(), entries_processed))
+        except Exception as ex:
+            if retry_count > 0:
+                print("Mongo exception caught: %s\n" % str(ex))
+                retry_count -= 1
+                print("Retrying after 10 seconds")
+                time.sleep(10)
+                continue
+            else:
+                print("Exhausted retry count. Quitting at time: %s" % datetime.datetime.now().isoformat())
+                raise ex
 
-                pool_id = str(entry.get("poolId"))
-                entry_id = str(entry.get("_id"))
-                rank = find_lineup_rank_by_entry_id(
-                    all_lineups_by_pool_id.get(pool_id, {}).get('_embedded', {}).get("lineups", []), entry_id)
-                leaderboard_str = memoized_pool(pool_id)
-                default_entry_id = entry.get("userId")
-                if user_mapping is not None and default_entry_id in user_mapping:
-                    default_entry_id = user_mapping[default_entry_id]
-
-                user_history_listing = {
-                        "userId": default_entry_id,
-                        "poolId": pool_id,
-                        "eventId": entry.get("eventId"),
-                        "entryId": entry_id,
-                        "challengeName": default_pool.get("name"),
-                        "challengeRules": set(pool_rules(default_pool)),
-                        "eventName": default_event.get("name"),
-                        "eventDate": default_event.get("startDate"),
-                        "poolSize": default_pool.get("poolSize"),
-                        "metaData": meta_data_str,
-                        "leaderboard": leaderboard_str,
-                        "rank": rank,
-                        "smartPicksWon": smart_picks_for_entries.get(entry_id),
-                        "won": smart_picks_for_entries.get(str(entry.get("_id"))) is not None,
-                        "discipline": default_event.get("discipline"),
-                        "status": None
-                }
-                if default_event.get("status") == "Canceled":
-                    user_history_listing["status"] = "Cancelled"
-                elif default_event.get("status") == "Past":
-                    user_history_listing["status"] = "Completed"
-                else:
-                    user_history_listing["status"] = default_event.get("status")
-                store_cassandra_entry(cassandra_session, user_history_listing, async=write_async)
-                entries_processed += 1
-
-                if entries_processed % 10 == 0:
-                    tq_bar.set_description('TOT MEM %dMB, MEM%%: %3.2f, Entries Processed: %d' % (my_proc.memory_info()[0]/(2**20), my_proc.memory_percent(), entries_processed))
 
 print(f"Processed {entries_processed} entries")
