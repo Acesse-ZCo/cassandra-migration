@@ -5,3 +5,4 @@ psutil==5.4.5
 tqdm==4.22.0
 cachetools==2.0.1
 python-dateutil==2.7.3
+awscli
