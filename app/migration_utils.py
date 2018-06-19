@@ -5,6 +5,7 @@ import datetime
 from cassandra import WriteTimeout, ConsistencyLevel
 from cassandra.query import SimpleStatement
 import logging
+import os
 
 logging.basicConfig(filename='/tmp/cassandra-log.out', level=logging.DEBUG)
 
@@ -61,13 +62,14 @@ def create_keyspace_and_table(session, keyspace):
     )
 
 
+history_ttl = int(os.getenv('HISTORY_TTL', 8640000))
 cassandra_insert_stmt = SimpleStatement(
     """
         INSERT INTO usercontesthistoryrepository (userid, poolid, challengename, challengerules, entryid, eventdate, eventid,
          eventname, leaderboard, metadata, poolsize, rank, smartpickswon, status, won, discipline, isconsistent)
             VALUES (%(userId)s, %(poolId)s, %(challengeName)s, %(challengeRules)s, %(entryId)s, %(eventDate)s, %(eventId)s, %(eventName)s,
-             %(leaderboard)s, %(metaData)s, %(poolSize)s, %(rank)s, %(smartPicksWon)s, %(status)s, %(won)s, %(discipline)s, True)
-    """, consistency_level=default_consistency
+             %(leaderboard)s, %(metaData)s, %(poolSize)s, %(rank)s, %(smartPicksWon)s, %(status)s, %(won)s, %(discipline)s, True) USING TTL {ttl}
+    """.format(ttl=history_ttl), consistency_level=default_consistency
 )
 
 def store_cassandra_entry(session, user_contest_history, async=False):

@@ -38,9 +38,9 @@ if start_date is not None:
         start_date = start_date + "000"
     query_obj["zonedDateTime"] = {"$lt": int(start_date)}
 
-entry_id = os.getenv('ENTRY_ID')
-if entry_id is not None:
-    query_obj["userId"] = entry_id
+pool_user_id = os.getenv('USER_ID')
+if pool_user_id is not None:
+    query_obj["userId"] = pool_user_id
 
 write_async = os.getenv('WRITE_ASYNC')
 
@@ -122,7 +122,12 @@ def memoized_pool(pool_id):
         json_pool = json_pool_id_mapping[pool_id]
     else:
         if pool_id in all_lineups_by_pool_id:
-            json_pool = json.dumps(all_lineups_by_pool_id[pool_id], sort_keys=True, indent=4, separators=(',', ': '))
+            leaderboard = all_lineups_by_pool_id[pool_id]
+            if '_embedded' in leaderboard and 'lineups' in leaderboard['_embedded']:
+                lineups = leaderboard['_embedded']['lineups']
+                lineups = sorted(lineups, key=lambda lineup: lineup.get('rank') or 99999)
+                leaderboard['_embedded']['lineups'] = lineups
+            json_pool = json.dumps(leaderboard, sort_keys=True, indent=4, separators=(',', ': '))
             json_pool_id_mapping[pool_id] = json_pool
     return json_pool
 
@@ -155,7 +160,8 @@ prize_regex = re.compile("^Prize\sAward")
 print(f"Processing {number_of_entries} entries in chunks of {query_chunk_size} starting from {entry_idx_start}")
 
 entries_processed = 0
-with tqdm(range(entry_idx_start * query_chunk_size, number_of_entries, query_chunk_size)) as tq_bar:
+
+with tqdm(range(0, number_of_entries, query_chunk_size), initial=entry_idx_start) as tq_bar:
     tq_bar.set_description('TOT MEM %dMB, MEM%%: %3.2f, Entries Processed: %d' % (my_proc.memory_info()[0]/(2**20), my_proc.memory_percent(), entries_processed))
     for entry_idx in tq_bar:
         entries = list(entries_coll.find(query_obj, skip=entry_idx, limit=query_chunk_size))
@@ -201,50 +207,27 @@ with tqdm(range(entry_idx_start * query_chunk_size, number_of_entries, query_chu
         lineup_by_pool_id = lineups_by_pool_ids(lineups_coll, missing_pool_ids)
         all_lineups_by_pool_id.update(lineup_by_pool_id)
 
-        agg_transactions = list(
-           transactions_coll.aggregate([
-               {"$match": {"userId": {"$in": list(user_ids)}}},
-               {"$match": {"metaData.entryId": {"$in": list(entry_ids)}, "txnType": "Credit"}},
-               {"$match": {"$or": [{"metaData.code": "1100"}, {"desc": {"$regex": prize_regex}}]}}
-           ]))
+        #find_start_time = time.time()
+        find_transactions = list(
+            transactions_coll.find(
+                {
+                    "metaData.entryId": {"$in": list(entry_ids)},
+                    "txnType": "Credit",
+                    "$or": [{"metaData.code": "1100"}, {"desc": {"$regex": prize_regex}}]
 
+                }
+            ).hint([('metaData.entryId', 1)])
+        )
+        #find_end_time = time.time()
+        #print("Time to process ", len(find_transactions), " transactions: ", find_end_time - find_start_time, " seconds")
 
-
-        # find_start_time = time.time()
-        # find_transactions = list(
-        #     transactions_coll.find(
-        #         {
-        #             "userId": {"$in": list(user_ids)},
-        #             "txnType": "Credit",
-        #             "metaData.entryId": {"$in": list(entry_ids)}
-        #         }
-        #     )
-        # )
-        # find_end_time = time.time()
-        #
-        # print("Time to process ", len(find_transactions), " transactions: ",
-        #       find_end_time - find_start_time, " seconds")
-
-        # find_start_time = time.time()
-        # find_transactions = list(
-        #     transactions_coll.find(
-        #         {
-        #             "metaData.entryId": {"$in": list(entry_ids)}
-        #         }
-        #     )
-        # )
-        # find_end_time = time.time()
-        #
-        # print("Time to process ", len(find_transactions), " transactions: ",
-        #       find_end_time - find_start_time, " seconds")
-
-        for transaction in agg_transactions:
+        for transaction in find_transactions:
             amount = transaction.get('amount')
 
             if amount is not None:
                 amount_value = amount.get('amount')
                 if amount_value is not None:
-                    amount_value = round(amount_value/1000)
+                    amount_value = round(amount_value/100)
                 amount['amount'] = amount_value
 
             smart_picks_for_entries[transaction['metaData']['entryId']] = json.dumps(amount)
@@ -258,12 +241,16 @@ with tqdm(range(entry_idx_start * query_chunk_size, number_of_entries, query_chu
                 if meta_data is not None:
                     if meta_data.get('roundType') is None:
                         meta_data['roundType'] = 'N/A'
+                    if meta_data.get('round') is None and default_event.get("name") is not None:
+                        event_name_round = default_event.get("name").split()[-1].strip()
+                        if event_name_round.isdigit():
+                            meta_data['round'] = event_name_round
                     meta_data_str = json.dumps(meta_data)
 
                 pool_id = str(entry.get("poolId"))
-                entry_id = str(entry.get("_id"))
+                user_id = str(entry.get("_id"))
                 rank = find_lineup_rank_by_entry_id(
-                    all_lineups_by_pool_id.get(pool_id, {}).get('_embedded', {}).get("lineups", []), entry_id)
+                    all_lineups_by_pool_id.get(pool_id, {}).get('_embedded', {}).get("lineups", []), user_id)
                 leaderboard_str = memoized_pool(pool_id)
                 default_entry_id = entry.get("userId")
                 if user_mapping is not None and default_entry_id in user_mapping:
@@ -273,7 +260,7 @@ with tqdm(range(entry_idx_start * query_chunk_size, number_of_entries, query_chu
                         "userId": default_entry_id,
                         "poolId": pool_id,
                         "eventId": entry.get("eventId"),
-                        "entryId": entry_id,
+                        "entryId": user_id,
                         "challengeName": default_pool.get("name"),
                         "challengeRules": set(pool_rules(default_pool)),
                         "eventName": default_event.get("name"),
@@ -282,7 +269,7 @@ with tqdm(range(entry_idx_start * query_chunk_size, number_of_entries, query_chu
                         "metaData": meta_data_str,
                         "leaderboard": leaderboard_str,
                         "rank": rank,
-                        "smartPicksWon": smart_picks_for_entries.get(entry_id),
+                        "smartPicksWon": smart_picks_for_entries.get(user_id),
                         "won": smart_picks_for_entries.get(str(entry.get("_id"))) is not None,
                         "discipline": default_event.get("discipline"),
                         "status": None
