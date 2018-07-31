@@ -26,7 +26,7 @@ swarm service create  --restart-condition none \
     --network data \
     --env MONGO_URL="mongodb://asports-stage-shard-00-00-gewvh.mongodb.net:27017,asports-stage-shard-00-01-gewvh.mongodb.net:27017,asports-stage-shard-00-02-gewvh.mongodb.net:27017/test?replicaSet=asports-stage-shard-0&authSource=admin" \
     --env MONGO_USERNAME=hmbadiwe \
-    --env MONGO_PASSWORD=6tGvKyBPvstKGIYM \
+    --env MONGO_PASSWORD=mongo_password \
     --env QUERY_CHUNK_SIZE=17000 \
     --env CASSANDRA_URL=tasks.cassandra \
     --env CASSANDRA_KEYSPACE='pool_history' \
