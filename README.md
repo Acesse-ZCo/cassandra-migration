@@ -55,4 +55,5 @@ swarm service create  --restart-condition none \
 * WRITE_ASYNC - used to optionally write cassandra entries asychronously to improve performance. Defaults to false
 * QUERY_CHUNK_SIZE - number of entries processed per iteration. Defaults to 100
 * USER_MAPPING - maps entry user ids to desired user ids
-* START_DATE - iso formatted date before which entries should be processed.
+* START_DATE - iso formatted date after which entries should be processed.
+* NUMBER_OF_DAYS - number of days for which to process. Used in combination with `START_DATE`

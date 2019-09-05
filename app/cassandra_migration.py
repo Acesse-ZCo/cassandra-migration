@@ -13,6 +13,7 @@ import socket
 from cachetools import LRUCache
 from dateutil.parser import parse
 import datetime
+from datetime import timedelta
 import time
 import re
 my_proc = psutil.Process(os.getpid())
@@ -37,6 +38,16 @@ if start_date is not None:
     if len(start_date) < 13:
         start_date = start_date + "000"
     query_obj["zonedDateTime"] = {"$lt": int(start_date)}
+
+current_date_time = datetime.datetime.utcnow()
+number_of_days = int(os.getenv('NUMBER_OF_DAYS', 100))
+query_max_time = int((current_date_time - timedelta(number_of_days)).timestamp() * 1000)
+
+zdt_query = query_obj.get("zonedDateTime") or {}
+zdt_query["$gt"] = query_max_time
+query_obj["zonedDateTime"] = zdt_query
+
+print("New query obj: ", str(query_obj))
 
 pool_user_id = os.getenv('USER_ID')
 if pool_user_id is not None:
@@ -104,6 +115,8 @@ def filter_out_entries(entries_list):
 
 
 max_cache_size = 50000
+
+default_history_ttl = int(os.getenv('HISTORY_TTL', 8640000))
 
 all_pool_ids = LRUCache(maxsize=max_cache_size)
 all_event_ids = LRUCache(maxsize=max_cache_size)
@@ -256,6 +269,14 @@ with tqdm(range(0, number_of_entries, query_chunk_size), initial=entry_idx_start
                 if user_mapping is not None and default_entry_id in user_mapping:
                     default_entry_id = user_mapping[default_entry_id]
 
+                ttl = default_history_ttl
+                event_start_date = default_event.get("startDate")
+                if event_start_date is not None:
+                    event_start_date = int(event_start_date/1000)
+                    diff_ttl = abs(int((current_date_time - datetime.datetime.utcfromtimestamp(event_start_date))
+                                       .total_seconds()))
+                    ttl = default_history_ttl - diff_ttl
+
                 user_history_listing = {
                         "userId": default_entry_id,
                         "poolId": pool_id,
@@ -272,7 +293,8 @@ with tqdm(range(0, number_of_entries, query_chunk_size), initial=entry_idx_start
                         "smartPicksWon": smart_picks_for_entries.get(user_id),
                         "won": smart_picks_for_entries.get(str(entry.get("_id"))) is not None,
                         "discipline": default_event.get("discipline"),
-                        "status": None
+                        "status": None,
+                        "ttl": ttl
                 }
                 if default_event.get("status") == "Canceled":
                     user_history_listing["status"] = "Cancelled"
